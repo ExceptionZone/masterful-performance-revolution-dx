@@ -1402,40 +1402,115 @@ const LANE_PROPS=[
   {colorStart:'#ffe600',colorEnd:'#ff7a00',rot:0,circle:true}
 ];
 const gid=id=>document.getElementById(id);
-/* ---------- SOUND EFFECTS (scroll.mp3, select.mp3) ---------- */
-const SFX_SCROLL_VOL=0.7,SFX_SELECT_VOL=1.0;
-/* Web Audio SFX: decoded once, played via AudioBufferSource. Works on iOS/Safari/Chrome
-   as long as the AudioContext is unlocked by the first tap/click/key (handled below). */
-const sfxBuffers={};
+/* ---------- SOUND EFFECTS (synthesized with Web Audio - no mp3 files needed) ---------- */
+const SFX_SCROLL_VOL=0.8,SFX_SELECT_VOL=0.9,SFX_MENU_VOL=0.75;
+let sfxNoise=null;
 function sfxCtx(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx}
-function loadSfx(src){
-  if(sfxBuffers[src]!==undefined)return;
-  sfxBuffers[src]=null;
-  fetch(src).then(r=>{if(!r.ok)throw new Error(src+" -> HTTP "+r.status);return r.arrayBuffer()})
-    .then(ab=>new Promise((res,rej)=>sfxCtx().decodeAudioData(ab,res,rej)))
-    .then(buf=>{sfxBuffers[src]=buf})
-    .catch(err=>{console.warn("SFX load failed:",src,err);delete sfxBuffers[src]});
+function sfxReady(){ // returns a running-or-resuming context, or null
+  const ctx=audioCtx;if(!ctx)return null;
+  if(ctx.state!=="running"){try{ctx.resume()}catch(e){}}
+  return ctx;
 }
-function makeSfx(src,voices,vol){
-  return()=>{
-    const ctx=audioCtx,buf=sfxBuffers[src];
-    if(!ctx||!buf)return;
-    if(ctx.state!=="running"){try{ctx.resume()}catch(e){}}
-    try{
-      const node=ctx.createBufferSource();node.buffer=buf;
-      const g=ctx.createGain();g.gain.value=vol;
-      node.connect(g);g.connect(ctx.destination);node.start(0);
-    }catch(e){}
-  };
+function sfxNoiseBuf(ctx){ // 1s of white noise, made once per context
+  if(sfxNoise&&sfxNoise.sampleRate===ctx.sampleRate)return sfxNoise;
+  const b=ctx.createBuffer(1,ctx.sampleRate,ctx.sampleRate),d=b.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  return sfxNoise=b;
+}
+/* gain envelope: 0 -> peak over `atk`, then exponential fall to silence over `dec` */
+function sfxEnv(g,t,peak,atk,dec){
+  g.gain.cancelScheduledValues(t);g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(Math.max(peak,0.0002),t+Math.max(atk,0.002));
+  g.gain.exponentialRampToValueAtTime(0.0001,t+atk+dec);
+}
+function sfxOsc(ctx,out,type,f0,f1,t,atk,dec,peak){
+  const o=ctx.createOscillator(),g=ctx.createGain();
+  o.type=type;o.frequency.setValueAtTime(f0,t);
+  if(f1&&f1!==f0)o.frequency.exponentialRampToValueAtTime(f1,t+atk+dec);
+  sfxEnv(g,t,peak,atk,dec);o.connect(g);g.connect(out);o.start(t);o.stop(t+atk+dec+0.05);
+  return g;
+}
+function sfxNoiseHit(ctx,out,t,atk,dec,peak,hpStart,hpEnd,sweepTime){
+  const n=ctx.createBufferSource();n.buffer=sfxNoiseBuf(ctx);
+  const hp=ctx.createBiquadFilter();hp.type="highpass";hp.Q.value=0.7;
+  hp.frequency.setValueAtTime(hpStart,t);
+  if(hpEnd&&hpEnd!==hpStart)hp.frequency.exponentialRampToValueAtTime(hpEnd,t+(sweepTime||atk+dec));
+  const g=ctx.createGain();sfxEnv(g,t,peak,atk,dec);
+  n.connect(hp);hp.connect(g);g.connect(out);n.start(t,Math.random()*0.5);n.stop(t+atk+dec+0.05);
+}
+function sfxMaster(ctx,vol){const m=ctx.createGain();m.gain.value=vol;m.connect(ctx.destination);return m}
+
+/* tiny crisp tick for scrolling the song list */
+function playScrollSfx(){
+  const ctx=sfxReady();if(!ctx)return;
+  try{
+    const t=ctx.currentTime+0.001,m=sfxMaster(ctx,SFX_SCROLL_VOL);
+    sfxOsc(ctx,m,"triangle",2100,1100,t,0.002,0.035,0.45);   // pitched "tok"
+    sfxOsc(ctx,m,"square",4200,3000,t,0.001,0.012,0.08);     // bright edge
+    sfxNoiseHit(ctx,m,t,0.001,0.018,0.35,4500);              // click transient
+  }catch(e){}
+}
+/* START!! - rising whoosh into a bright power-chord stab with a sparkle */
+function playSelectSfx(){
+  const ctx=sfxReady();if(!ctx)return;
+  try{
+    const t=ctx.currentTime+0.005,m=sfxMaster(ctx,SFX_SELECT_VOL);
+    // riser
+    const lp=ctx.createBiquadFilter();lp.type="lowpass";lp.Q.value=4;
+    lp.frequency.setValueAtTime(400,t);lp.frequency.exponentialRampToValueAtTime(6000,t+0.16);lp.connect(m);
+    sfxOsc(ctx,lp,"sawtooth",180,900,t,0.03,0.13,0.35);
+    sfxNoiseHit(ctx,m,t,0.08,0.09,0.25,1500,8000,0.17);
+    // impact at t+0.16: chord (C5 E5 G5 C6) + sub thump + crash burst
+    const h=t+0.16;
+    [523.25,659.25,783.99,1046.5].forEach((f,i)=>{
+      sfxOsc(ctx,m,"square",f,f,h,0.003,0.45-i*0.04,0.11);
+      sfxOsc(ctx,m,"sawtooth",f*1.005,f*1.005,h,0.003,0.3,0.05);
+    });
+    sfxOsc(ctx,m,"sine",140,45,h,0.003,0.28,0.7);
+    sfxNoiseHit(ctx,m,h,0.002,0.4,0.4,5000);
+    // sparkle tail
+    sfxOsc(ctx,m,"sine",2093,2093,h+0.05,0.002,0.4,0.12);
+    sfxOsc(ctx,m,"sine",3136,3136,h+0.11,0.002,0.45,0.08);
+  }catch(e){}
+}
+/* SOLO PLAY / SETTINGS - sharp osu!stream-style cymbal: quick reverse-swell into a crisp metallic crash, with a short echo */
+function playMenuSfx(){
+  const ctx=sfxReady();if(!ctx)return;
+  try{
+    const t=ctx.currentTime+0.005,m=sfxMaster(ctx,SFX_MENU_VOL);
+    const atk=0.065,dec=0.5,pk=t+atk;
+    // bus -> dry + short filtered echo for space/shine
+    const bus=ctx.createGain();bus.connect(m);
+    const dl=ctx.createDelay(0.5);dl.delayTime.value=0.085;
+    const fb=ctx.createGain();fb.gain.value=0.32;
+    const elp=ctx.createBiquadFilter();elp.type="highpass";elp.frequency.value=5000;
+    const wet=ctx.createGain();wet.gain.value=0.4;
+    bus.connect(dl);dl.connect(elp);elp.connect(fb);fb.connect(dl);elp.connect(wet);wet.connect(m);
+    // inharmonic square cluster = metallic body, bright + resonant
+    const hp=ctx.createBiquadFilter();hp.type="highpass";hp.frequency.value=7500;hp.Q.value=0.9;
+    const bp=ctx.createBiquadFilter();bp.type="peaking";bp.frequency.value=10500;bp.Q.value=2;bp.gain.value=8;
+    const cg=ctx.createGain();sfxEnv(cg,t,0.26,atk,dec);
+    hp.connect(bp);bp.connect(cg);cg.connect(bus);
+    [205.3,304.4,369.6,522.7,540,800,1130,1480,1890].forEach(f=>{
+      const o=ctx.createOscillator();o.type="square";o.frequency.value=f*2.4;
+      o.connect(hp);o.start(t);o.stop(t+atk+dec+0.05);
+    });
+    // fast rising noise swell (the "reverse" part) - ends at the strike
+    sfxNoiseHit(ctx,bus,t,atk*0.95,0.01,0.3,3500,12000,atk);
+    // the strike: sharp noise crack + very short metallic tick, then a quick tail
+    sfxNoiseHit(ctx,bus,pk,0.001,0.4,0.55,8500,6000,0.4);
+    sfxNoiseHit(ctx,bus,pk,0.001,0.09,0.4,12000);
+    sfxOsc(ctx,bus,"square",7000,2500,pk,0.001,0.025,0.14);
+    // glassy pings on top for the "cool" shimmer
+    sfxOsc(ctx,bus,"sine",5274,5274,pk,0.001,0.32,0.06);
+    sfxOsc(ctx,bus,"sine",3520,3520,pk,0.001,0.22,0.05);
+  }catch(e){}
 }
 function unlockSfx(){
   try{const ctx=sfxCtx();if(ctx.state!=="running")ctx.resume();
     const b=ctx.createBuffer(1,1,22050),n=ctx.createBufferSource();n.buffer=b;n.connect(ctx.destination);n.start(0)}catch(e){}
-  loadSfx("scroll.mp3");loadSfx("select.mp3");
 }
 ["pointerdown","touchstart","touchend","mousedown","click","keydown"].forEach(ev=>window.addEventListener(ev,unlockSfx,{passive:true}));
-const playScrollSfx=makeSfx("scroll.mp3",4,SFX_SCROLL_VOL);
-const playSelectSfx=makeSfx("select.mp3",2,SFX_SELECT_VOL);
 /* ---------- shared perf helpers ---------- */
 let lowPerf=false,chartHead=0,wheelEls=[],wheelSelEl=null,previewDelayTimer=null,lastSelectT=0,lastScoreTxt="",lastComboVal=-1;
 const noCoverIds=new Set(),arrowSprites=new Map(),glowSprites=new Map();
@@ -2861,9 +2936,9 @@ window.addEventListener("keydown",e=>{
   if(e.key==="ArrowDown"||e.key==="ArrowRight"){hmSel(hmIdx+1);e.preventDefault()}
   else if(e.key==="ArrowUp"||e.key==="ArrowLeft"){hmSel(hmIdx-1);e.preventDefault()}
 });
-gid("home-solo-btn").onclick=showSongSelect;
+gid("home-solo-btn").onclick=()=>{playMenuSfx();showSongSelect()};
 gid("home-return-btn").onclick=showHome;
-gid("home-settings-btn").onclick=()=>settingsPanel.classList.remove("hidden");
+gid("home-settings-btn").onclick=()=>{playMenuSfx();settingsPanel.classList.remove("hidden")};
 gid("settings-close-btn").onclick=()=>settingsPanel.classList.add("hidden");
 settingsPanel.addEventListener("click",e=>{if(e.target===settingsPanel)settingsPanel.classList.add("hidden")});
 window.addEventListener("keydown",e=>{
