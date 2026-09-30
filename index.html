@@ -1404,15 +1404,36 @@ const LANE_PROPS=[
 const gid=id=>document.getElementById(id);
 /* ---------- SOUND EFFECTS (scroll.mp3, select.mp3) ---------- */
 const SFX_SCROLL_VOL=0.7,SFX_SELECT_VOL=1.0;
+/* Web Audio SFX: decoded once, played via AudioBufferSource. Works on iOS/Safari/Chrome
+   as long as the AudioContext is unlocked by the first tap/click/key (handled below). */
+const sfxBuffers={};
+function sfxCtx(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx}
+function loadSfx(src){
+  if(sfxBuffers[src]!==undefined)return;
+  sfxBuffers[src]=null;
+  fetch(src).then(r=>{if(!r.ok)throw new Error(src+" -> HTTP "+r.status);return r.arrayBuffer()})
+    .then(ab=>new Promise((res,rej)=>sfxCtx().decodeAudioData(ab,res,rej)))
+    .then(buf=>{sfxBuffers[src]=buf})
+    .catch(err=>{console.warn("SFX load failed:",src,err);delete sfxBuffers[src]});
+}
 function makeSfx(src,voices,vol){
-  const pool=[];let n=0;
-  for(let i=0;i<voices;i++){const a=new Audio(src);a.preload="auto";a.volume=vol;pool.push(a)}
-  return()=>{ // round-robin pool so rapid scrolling can overlap instead of cutting itself off
-    const a=pool[n];n=(n+1)%pool.length;
-    try{a.currentTime=0}catch(e){}
-    try{const p=a.play();if(p&&p.catch)p.catch(()=>{})}catch(e){}
+  return()=>{
+    const ctx=audioCtx,buf=sfxBuffers[src];
+    if(!ctx||!buf)return;
+    if(ctx.state!=="running"){try{ctx.resume()}catch(e){}}
+    try{
+      const node=ctx.createBufferSource();node.buffer=buf;
+      const g=ctx.createGain();g.gain.value=vol;
+      node.connect(g);g.connect(ctx.destination);node.start(0);
+    }catch(e){}
   };
 }
+function unlockSfx(){
+  try{const ctx=sfxCtx();if(ctx.state!=="running")ctx.resume();
+    const b=ctx.createBuffer(1,1,22050),n=ctx.createBufferSource();n.buffer=b;n.connect(ctx.destination);n.start(0)}catch(e){}
+  loadSfx("scroll.mp3");loadSfx("select.mp3");
+}
+["pointerdown","touchstart","touchend","mousedown","click","keydown"].forEach(ev=>window.addEventListener(ev,unlockSfx,{passive:true}));
 const playScrollSfx=makeSfx("scroll.mp3",4,SFX_SCROLL_VOL);
 const playSelectSfx=makeSfx("select.mp3",2,SFX_SELECT_VOL);
 /* ---------- shared perf helpers ---------- */
