@@ -1402,7 +1402,7 @@ const LANE_PROPS=[
   {colorStart:'#ffe600',colorEnd:'#ff7a00',rot:0,circle:true}
 ];
 const gid=id=>document.getElementById(id);
-/* ---------- SOUND EFFECTS (sfx/scroll.mp3, sfx/select.mp3) ---------- */
+/* ---------- SOUND EFFECTS (scroll.mp3, select.mp3) ---------- */
 const SFX_SCROLL_VOL=0.7,SFX_SELECT_VOL=1.0;
 function makeSfx(src,voices,vol){
   const pool=[];let n=0;
@@ -1413,8 +1413,8 @@ function makeSfx(src,voices,vol){
     try{const p=a.play();if(p&&p.catch)p.catch(()=>{})}catch(e){}
   };
 }
-const playScrollSfx=makeSfx("sfx/scroll.mp3",4,SFX_SCROLL_VOL);
-const playSelectSfx=makeSfx("sfx/select.mp3",2,SFX_SELECT_VOL);
+const playScrollSfx=makeSfx("scroll.mp3",4,SFX_SCROLL_VOL);
+const playSelectSfx=makeSfx("select.mp3",2,SFX_SELECT_VOL);
 /* ---------- shared perf helpers ---------- */
 let lowPerf=false,chartHead=0,wheelEls=[],wheelSelEl=null,previewDelayTimer=null,lastSelectT=0,lastScoreTxt="",lastComboVal=-1;
 const noCoverIds=new Set(),arrowSprites=new Map(),glowSprites=new Map();
